@@ -4,7 +4,8 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 import os
 import psycopg2
-import requests
+import aiohttp
+import psycopg
 
 load_dotenv()
 
@@ -12,8 +13,10 @@ app = Flask(__name__)
 CORS(app)
 
 db_url = os.getenv("DB_URL")
-db_conn = psycopg2.connect(db_url)
+db_conn_link = psycopg2.connect(db_url)
+# db_conn = await psycopg.AsyncConnection.connect()
 gh_token = os.getenv("GITHUB_API_TOKEN")
+
 
 INSERT_GRADUATE_RETURN_ID = "INSERT INTO graduates_data (name, github_url, role, cv_link) VALUES (%s, %s, %s, %s) RETURNING id"
 GET_GRADUATE_NAME = "SELECT 1 FROM graduates_data WHERE name = (%s)"
@@ -28,7 +31,7 @@ def get_home():
     traceback.print_exc()
     return "Hello Server. Im running now"
 
-
+# --------------------------------------------------------------
 # ROUTE TO GET ALL GRADUATES IN DATABASE
 # @app.route("/allGraduates")
 # def all_graduates():
@@ -53,6 +56,7 @@ def get_home():
 #         traceback.print_exc()
 #         return jsonify({"Error message": str(error)}), 500
 
+# --------------------------------------------------------------
 
 # ROUTE TO POST GRADUATE INFORMATION INTO DATABASE
 @app.route("/submit_graduate", methods=["GET", "POST"])
@@ -63,8 +67,16 @@ def submit_graduate():
         github_url = grad_data["github_url"]
         role = grad_data["role"]
         cv_link = grad_data["cv_link"]
-        with db_conn:
-            with db_conn.cursor() as cursor:
+
+        #---------------------------------------------------------
+        # with db_conn:
+        #     with db_conn.cursor() as cursor:
+        #         cursor.execute(GET_GRADUATE_NAME, (name,))
+        #         existing_graduate_name = cursor.fetchone()
+        #---------------------------------------------------------
+        
+        with db_conn_link:
+            with db_conn_link.cursor() as cursor:
                 cursor.execute(GET_GRADUATE_NAME, (name,))
                 existing_graduate_name = cursor.fetchone()
 
@@ -77,12 +89,13 @@ def submit_graduate():
                     raise ValueError("Please fill in all required fields")
 
                 cursor.execute(INSERT_GRADUATE_RETURN_ID,
-                               (name, github_url, role, cv_link))
+                                     (name, github_url, role, cv_link))
 
                 cursor.execute(GET_GRADUATE_ID, (name,))
-                graduate_id = cursor.fetchone()[0]
+                graduate_id = cursor.fetchone()
+                # graduate_id = await result[0]
 
-            db_conn.commit()
+            db_conn_link.commit()
             return jsonify({"id": graduate_id, "message": f"{name} successfully added"}), 201
 
     except Exception as error:
@@ -102,7 +115,7 @@ def extract_github_username(url):
 
         return username
 
-
+#--------------------------------------------------------------
 # ROUTE TO INTERACT WITH GITHUB GRAPHQL API TO PULL INFORMATION
 # @app.route("/graduate", methods=["POST"])
 # def graduate():
@@ -160,60 +173,134 @@ def extract_github_username(url):
 #         print("Error:", str(error))
 #         return jsonify({"Error": str(error)}), 500
 
+#----------------------------------------------------------------------
+# @app.route("/allGraduates", methods=["GET", "POST"])
+# def all_graduates():
+#     try:
+#         with db_conn.cursor() as cursor:
+#             cursor.execute(GET_ALL_GRADUATES)
+#             cursor_result = cursor.fetchall()
+
+#             if not cursor_result:
+#                 response = jsonify({"error": "No graduates available"}), 400
+#                 return response
+
+#             column_names = [each_description[0]
+#                             for each_description in cursor.description]
+#             all_results = [dict(zip(column_names, row))
+#                            for row in cursor_result]
+
+#             GITHUB_HEADERS = {
+#                 "Authorization": f"Bearer {gh_token}",
+#                 "Content-Type": "application/json",
+#             }
+
+#             cursor.execute(GET_ALL_GITHUB_LINKS)
+#             all_github_data = cursor.fetchall()
+#             print(all_github_data)
+
+#             all_data = []
+
+#             for graduate_data in all_results:
+#                 graduate_github_name = graduate_data.get("github_url")
+#                 if graduate_github_name:
+#                     username = extract_github_username(graduate_github_name)
+
+#                     if username is not None:
+#                         github_query_json = {
+#                             "query": f'{{user(login: "{username}"){{avatarUrl(size: 256), bio, email, websiteUrl, socialAccounts(first: 1){{nodes {{url}}}} }} }}'
+#                         }
+
+#                         response = requests.post(
+#                             os.getenv("GITHUB_API_ENDPOINT"),
+#                             json=github_query_json,
+#                             headers=GITHUB_HEADERS,
+#                         )
+#                         result = response.json()
+#                         result["id"] = graduate_data.get("id")
+
+#                         # Combine data based on GitHub username
+#                         all_data.append(
+#                             {"db_data": graduate_data, "github_data": result})
+#                     else:
+#                         return jsonify({"Error": f"Failed to extract GitHub username from: {graduate_github_name}"}), 400
+#                 else:
+#                     return jsonify({"Error": "Graduate name is missing"}), 400
+
+#             return jsonify(all_data), 200
+
+#     except Exception as error:
+#         print("Error:", str(error))
+#         return jsonify({"Error": str(error)}), 500
+
+#---------------------------------------------------------------
+
 @app.route("/allGraduates", methods=["GET", "POST"])
-def all_graduates():
+async def all_graduates():
     try:
-        with db_conn.cursor() as cursor:
-            cursor.execute(GET_ALL_GRADUATES)
-            cursor_result = cursor.fetchall()
+        #----------------------------------------------------
+        # aconn = await psycopg.AsyncConnection.connect()
+        # async with aconn:
+        #     async with aconn.cursor() as cur:
+        #         await cur.execute(...)
+        #-----------------------------------------------------
+        db_conn = await psycopg.AsyncConnection.connect(db_url)
+        async with db_conn:
+            async with db_conn.cursor() as cursor:
+                await cursor.execute(GET_ALL_GRADUATES)
+                cursor_result = await cursor.fetchall()
 
-            if not cursor_result:
-                response = jsonify({"error": "No graduates available"}), 400
-                return response
+                if not cursor_result:
+                    response = jsonify(
+                        {"error": "No graduates available"}), 400
+                    return response
 
-            column_names = [each_description[0]
-                            for each_description in cursor.description]
-            all_results = [dict(zip(column_names, row))
-                           for row in cursor_result]
+                column_names = [each_description[0]
+                                for each_description in cursor.description]
+                all_results = [dict(zip(column_names, row))
+                               for row in cursor_result]
 
-            GITHUB_HEADERS = {
-                "Authorization": f"Bearer {gh_token}",
-                "Content-Type": "application/json",
-            }
+                GITHUB_HEADERS = {
+                    "Authorization": f"Bearer {gh_token}",
+                    "Content-Type": "application/json",
+                }
 
-            cursor.execute(GET_ALL_GITHUB_LINKS)
-            all_github_data = cursor.fetchall()
-            print(all_github_data)
+                await cursor.execute(GET_ALL_GITHUB_LINKS)
+                all_github_data = await cursor.fetchall()
+                print(all_github_data)
 
-            all_data = []
+                all_data = []
 
-            for graduate_data in all_results:
-                graduate_github_name = graduate_data.get("github_url")
-                if graduate_github_name:
-                    username = extract_github_username(graduate_github_name)
+                for graduate_data in all_results:
+                    graduate_github_name = graduate_data.get("github_url")
+                    if graduate_github_name:
+                        username = extract_github_username(
+                            graduate_github_name)
 
-                    if username is not None:
-                        github_query_json = {
-                            "query": f'{{user(login: "{username}"){{avatarUrl(size: 256), bio, email, websiteUrl, socialAccounts(first: 1){{nodes {{url}}}} }} }}'
-                        }
+                        if username is not None:
+                            github_query_json = {
+                                "query": f'{{user(login: "{username}"){{avatarUrl(size: 256), bio, email, websiteUrl, socialAccounts(first: 1){{nodes {{url}}}} }} }}'
+                            }
 
-                        response = requests.post(
-                            os.getenv("GITHUB_API_ENDPOINT"),
-                            json=github_query_json,
-                            headers=GITHUB_HEADERS,
-                        )
-                        result = response.json()
-                        result["id"] = graduate_data.get("id")
+                            async with aiohttp.ClientSession() as session:
+                                async with session.post(
+                                    os.getenv("GITHUB_API_ENDPOINT"),
+                                    json=github_query_json,
+                                    headers=GITHUB_HEADERS,
+                                    ssl=False
+                                ) as response:
+                                    result = await response.json()
 
-                        # Combine data based on GitHub username
-                        all_data.append(
-                            {"db_data": graduate_data, "github_data": result})
+                            result["id"] = graduate_data.get("id")
+
+                            all_data.append(
+                                {"db_data": graduate_data, "github_data": result})
+                        else:
+                            return jsonify({"Error": f"Failed to extract GitHub username from: {graduate_github_name}"}), 400
                     else:
-                        return jsonify({"Error": f"Failed to extract GitHub username from: {graduate_github_name}"}), 400
-                else:
-                    return jsonify({"Error": "Graduate name is missing"}), 400
+                        return jsonify({"Error": "Graduate name is missing"}), 400
 
-            return jsonify(all_data), 200
+                return jsonify(all_data), 200
 
     except Exception as error:
         print("Error:", str(error))
