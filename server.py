@@ -111,7 +111,8 @@ def extract_github_username(url):
     if url.startswith(prefix):
         details = url[len(prefix):]
 
-        username = "".join(char for char in details if char.isalnum())
+        # Split the URL at '/' to get the username
+        username = details.split("/")[0]
 
         return username
 
